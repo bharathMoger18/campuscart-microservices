@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+**/*.pyc
+venv/
+.venv/
+*.egg-info/
+
+# Django
+.env
+*.sqlite3
+staticfiles/
+media/
+
+# K8s secrets (never commit real secrets)
+*-secret.yaml
+secrets/
+
+# OS
+.DS_Store
+*.swp

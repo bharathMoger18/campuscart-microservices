@@ -1,0 +1,87 @@
+services:
+
+  # ── PostgreSQL Database ───────────────────────────────────────────────────
+  notification-db:
+    image: postgres:14
+    container_name: notification-db
+    environment:
+      POSTGRES_DB: notification_db
+      POSTGRES_USER: notification_user
+      POSTGRES_PASSWORD: notification_pass
+    volumes:
+      - notification_db_data:/var/lib/postgresql/data
+    ports:
+      - "5436:5432"        # host:5436 → container:5432
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U notification_user -d notification_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - default
+
+  # ── Redis (Channel Layer) ─────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: notification-redis
+    ports:
+      - "6380:6379"        # host:6380 → container:6379
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - default
+
+  # ── Notification Service (Daphne ASGI) ───────────────────────────────────
+  notification-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: notification-service:1.0.0
+    container_name: notification-service
+    env_file:
+      - .env
+    environment:
+      # Override .env values for Docker networking
+      # Container names are used as hostnames inside Docker network
+      DB_HOST: notification-db
+      DB_PORT: "5432"
+      REDIS_URL: redis://redis:6379/0
+      AUTH_SERVICE_URL: http://auth-service:8000
+      ALLOWED_HOSTS: "localhost,127.0.0.1,notification-service"
+    ports:
+      - "8004:8000"        # host:8004 → container:8000
+    depends_on:
+      notification-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health/')\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - default          # our own network
+      - auth-network     # join auth-service network to call users/public/<id>/
+    restart: unless-stopped
+
+# ── Volumes ───────────────────────────────────────────────────────────────────
+volumes:
+  notification_db_data:
+
+# ── Networks ──────────────────────────────────────────────────────────────────
+networks:
+  # Our own network — created automatically by Docker Compose
+  # Name will be: notification-service_default
+  default:
+    name: notification-service_default
+
+  # External network — join auth-service's network
+  # auth-service must be running before: docker compose up in auth-service/
+  auth-network:
+    external: true
+    name: auth-service_default

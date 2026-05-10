@@ -1,0 +1,103 @@
+# ─────────────────────────────────────────────────────────────
+# ORDER-SERVICE DOCKER COMPOSE
+# ─────────────────────────────────────────────────────────────
+
+services:
+
+  # ── ORDER DATABASE ──────────────────────────────────────────
+  order-db:
+    image: postgres:14
+    container_name: order-db
+    environment:
+      POSTGRES_DB: order_db
+      POSTGRES_USER: order_user
+      POSTGRES_PASSWORD: order_password
+    volumes:
+      - order_db_data:/var/lib/postgresql/data
+    # Internal port only — no host port mapping needed
+    # order-service connects via Docker network using container name
+    # Host can still access via: docker exec order-db psql ...
+    expose:
+      - "5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U order_user -d order_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - default
+
+  # ── ORDER SERVICE ───────────────────────────────────────────
+  order-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: order-service
+    # Host port 8003 → container port 8000
+    # 8003 chosen because:
+    #   8000 = monolith, 8001 = auth-service, 8002 = product-service
+    ports:
+      - "8003:8000"
+    environment:
+      # Django
+      DEBUG: "False"
+      SECRET_KEY: "a_9qtqovhZgKBIB59OM2XIvkNU59Zi9MjgQeWUuAYAPh19Oq-Tqu8Z_SYgv5IRQy8LQ"
+      ALLOWED_HOSTS: "localhost,127.0.0.1,order-service"
+
+      # Database — use container name, internal port 5432
+      DB_NAME: order_db
+      DB_USER: order_user
+      DB_PASSWORD: order_password
+      DB_HOST: order-db        # ← container name, not localhost!
+      DB_PORT: "5432"          # ← internal port, not 5435!
+
+      # Stripe — use your real test keys
+      STRIPE_SECRET_KEY: "${STRIPE_SECRET_KEY}"
+      STRIPE_PUBLISHABLE_KEY: "${STRIPE_PUBLISHABLE_KEY}"
+      STRIPE_WEBHOOK_SECRET: "${STRIPE_WEBHOOK_SECRET}"
+
+      # Inter-service URLs — use container names on Docker networks
+      # These work because we join auth-network and product-network below
+      AUTH_SERVICE_URL: "http://auth-service:8000"
+      PRODUCT_SERVICE_URL: "http://product-service:8000"
+
+      CORS_ALLOWED_ORIGINS: "http://localhost:3000,http://localhost:8080"
+
+    depends_on:
+      order-db:
+        condition: service_healthy  # wait for DB healthcheck to pass
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+    networks:
+      - default          # order-service's own network
+      - auth-network     # to reach auth-service container
+      - product-network  # to reach product-service container
+
+# ── VOLUMES ────────────────────────────────────────────────────
+volumes:
+  order_db_data:
+    # Named volume — data persists across container restarts
+    # docker volume rm order-service_order_db_data to reset
+
+# ── NETWORKS ───────────────────────────────────────────────────
+networks:
+  # Our own network — order-service + order-db talk here
+  default:
+    name: order-service_default
+
+  # External networks from other services
+  # These MUST already exist (created by auth-service and product-service)
+  # Pattern 5 from General's briefing
+  auth-network:
+    external: true
+    name: auth-service_default
+
+  product-network:
+    external: true
+    name: product-service_default
