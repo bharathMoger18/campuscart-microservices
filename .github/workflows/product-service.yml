@@ -21,7 +21,7 @@ env:
 jobs:
   build-and-test:
     name: Build & Test
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
 
     steps:
       - name: Checkout code
@@ -56,7 +56,7 @@ jobs:
 
   build-and-push:
     name: Build & Push Image
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     needs: build-and-test
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
@@ -96,7 +96,7 @@ jobs:
 
   deploy:
     name: Deploy to Kubernetes
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     needs: build-and-push
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
@@ -104,7 +104,7 @@ jobs:
       - name: Set up SSH
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.KUBE_SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          cp ~/.ssh/github_actions_key ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -H ${{ secrets.KUBE_SSH_HOST }} >> ~/.ssh/known_hosts
 
