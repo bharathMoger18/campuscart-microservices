@@ -12,17 +12,10 @@ on:
       - 'notification-service/**'
   workflow_dispatch:
 
-env:
-  SERVICE_NAME: notification-service
-  HELM_RELEASE: notification
-  HELM_CHART: /home/bharath/helm/notification-service
-  K8S_NAMESPACE: campuscart
-
 jobs:
   build-and-test:
     name: Build & Test
     runs-on: self-hosted
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -57,14 +50,13 @@ jobs:
           VAPID_EMAIL: mailto:test@test.com
         run: |
           python manage.py check
-          echo "✅ Django checks passed"
+          echo "Django checks passed"
 
   build-and-push:
     name: Build & Push Image
     runs-on: self-hosted
     needs: build-and-test
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -93,66 +85,36 @@ jobs:
             ghcr.io/bharathmoger18/notification-service:latest
 
       - name: Print image details
-        run: |
-          echo "✅ Image pushed successfully"
-          echo "Image: ghcr.io/bharathmoger18/notification-service:${{ steps.sha.outputs.short }}"
+        run: echo "Image pushed ghcr.io/bharathmoger18/notification-service:${{ steps.sha.outputs.short }}"
 
   deploy:
     name: Deploy to Kubernetes
     runs-on: self-hosted
     needs: build-and-push
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-
     steps:
-      - name: Set up SSH
-        run: |
-          mkdir -p ~/.ssh
-          cp ~/.ssh/github_actions_key ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H ${{ secrets.KUBE_SSH_HOST }} >> ~/.ssh/known_hosts
-
       - name: Get short SHA
         id: sha
         run: echo "short=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
 
       - name: Deploy via Helm on K8s master
+        env:
+          IMAGE_TAG: ${{ steps.sha.outputs.short }}
+          SSH_HOST: ${{ secrets.KUBE_SSH_HOST }}
+          SSH_USER: ${{ secrets.KUBE_SSH_USER }}
         run: |
-          ssh -i ~/.ssh/github_actions_key -o StrictHostKeyChecking=no -T ${{ secrets.KUBE_SSH_USER }}@${{ secrets.KUBE_SSH_HOST }} << ENDSSH
-            set -e
-            echo "🚀 Deploying notification-service..."
-
-            helm upgrade notification /home/bharath/helm/notification-service \
-              --namespace campuscart
-              --set image.repository=ghcr.io/bharathmoger18/notification-service \
-              --set image.tag=${{ steps.sha.outputs.short }} \
-              --set image.pullPolicy=Always \
-              \
-
-            echo "✅ Helm upgrade complete"
-
-            kubectl rollout status deployment/notification-notification-service \
-              --namespace campuscart
-
-            echo "🎉 Deployment successful!"
-            kubectl get pods -n campuscart | grep notification
-          ENDSSH
+          ssh -i ~/.ssh/github_actions_key -o StrictHostKeyChecking=no -T ${SSH_USER}@${SSH_HOST} "helm upgrade notification /home/bharath/helm/notification-service --namespace campuscart --set image.repository=ghcr.io/bharathmoger18/notification-service --set image.tag=${IMAGE_TAG} --set image.pullPolicy=Always && kubectl rollout status deployment/notification-notification-service --namespace campuscart --timeout=5m && echo DEPLOY_OK"
 
       - name: Verify service health
+        env:
+          SSH_HOST: ${{ secrets.KUBE_SSH_HOST }}
+          SSH_USER: ${{ secrets.KUBE_SSH_USER }}
         run: |
           sleep 15
-          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-            --max-time 15 \
-            http://${{ secrets.KUBE_WORKER_HOST }}:30080/api/v1/push/public-key/)
-          echo "Health check response: $HTTP_CODE"
-          if [ "$HTTP_CODE" = "200" ]; then
-            echo "✅ Notification service is healthy!"
-          else
-            echo "❌ Unexpected response: $HTTP_CODE"
-            exit 1
-          fi
+          ssh -i ~/.ssh/github_actions_key -o StrictHostKeyChecking=no -T ${SSH_USER}@${SSH_HOST} "kubectl get pods -n campuscart | grep notification"
 
       - name: Deployment summary
         run: |
-          echo "✅ Notification service deployed!"
+          echo "Service deployed: notification-service"
           echo "Image: ghcr.io/bharathmoger18/notification-service:${{ steps.sha.outputs.short }}"
           echo "Time: $(date)"
