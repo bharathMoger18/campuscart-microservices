@@ -127,7 +127,7 @@ jobs:
               --set image.tag=${{ steps.sha.outputs.short }} \
               --set image.pullPolicy=Always \
               --wait \
-              --timeout 5m
+              --timeout 10m
 
             echo "✅ Helm upgrade complete"
 
@@ -144,7 +144,7 @@ jobs:
           sleep 15
           HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
             --max-time 15 \
-            http://${{ secrets.KUBE_SSH_HOST }}:30080/api/v1/push/public-key/)
+            http://${{ secrets.KUBE_WORKER_HOST }}:30080/api/v1/push/public-key/)
           echo "Health check response: $HTTP_CODE"
           if [ "$HTTP_CODE" = "200" ]; then
             echo "✅ Notification service is healthy!"

@@ -156,7 +156,7 @@ jobs:
             -X POST \
             -H "Content-Type: application/json" \
             -d '{"email":"test@test.com","password":"wrong"}' \
-            http://${{ secrets.KUBE_SSH_HOST }}:30080/api/v1/auth/token/)
+            http://${{ secrets.KUBE_WORKER_HOST }}:30080/api/v1/auth/token/)
           echo "Health check response: $HTTP_CODE"
           if [ "$HTTP_CODE" = "401" ] || [ "$HTTP_CODE" = "400" ]; then
             echo "✅ Auth service is healthy!"

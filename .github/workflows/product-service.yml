@@ -139,7 +139,7 @@ jobs:
           sleep 15
           HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
             --max-time 15 \
-            http://${{ secrets.KUBE_SSH_HOST }}:30080/api/v1/products/)
+            http://${{ secrets.KUBE_WORKER_HOST }}:30080/api/v1/products/)
           echo "Health check response: $HTTP_CODE"
           if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "401" ]; then
             echo "✅ Product service is healthy!"
