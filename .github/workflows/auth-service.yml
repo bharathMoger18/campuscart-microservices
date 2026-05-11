@@ -97,8 +97,6 @@ jobs:
           tags: |
             ghcr.io/bharathmoger18/auth-service:${{ steps.sha.outputs.short }}
             ghcr.io/bharathmoger18/auth-service:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
 
       - name: Print image details
         run: |
@@ -128,7 +126,7 @@ jobs:
 
       - name: Deploy via Helm on K8s master
         run: |
-          ssh ${{ secrets.KUBE_SSH_USER }}@${{ secrets.KUBE_SSH_HOST }} << ENDSSH
+          ssh -i ~/.ssh/github_actions_key -o StrictHostKeyChecking=no -T ${{ secrets.KUBE_SSH_USER }}@${{ secrets.KUBE_SSH_HOST }} << ENDSSH
             set -e
             echo "🚀 Deploying auth-service..."
 
