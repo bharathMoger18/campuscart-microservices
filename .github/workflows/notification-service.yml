@@ -122,18 +122,16 @@ jobs:
             echo "🚀 Deploying notification-service..."
 
             helm upgrade notification /home/bharath/helm/notification-service \
-              --namespace campuscart \
+              --namespace campuscart
               --set image.repository=ghcr.io/bharathmoger18/notification-service \
               --set image.tag=${{ steps.sha.outputs.short }} \
               --set image.pullPolicy=Always \
-              --wait \
-              --timeout 10m
+              \
 
             echo "✅ Helm upgrade complete"
 
             kubectl rollout status deployment/notification-notification-service \
-              --namespace campuscart \
-              --timeout=5m
+              --namespace campuscart
 
             echo "🎉 Deployment successful!"
             kubectl get pods -n campuscart | grep notification

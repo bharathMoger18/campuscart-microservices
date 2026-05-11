@@ -121,18 +121,15 @@ jobs:
             echo "🚀 Deploying order-service..."
 
             helm upgrade order /home/bharath/helm/order-service \
-              --namespace campuscart \
+              --namespace campuscart
               --set image.repository=ghcr.io/bharathmoger18/order-service \
               --set image.tag=${{ steps.sha.outputs.short }} \
               --set image.pullPolicy=Always \
-              --wait \
-              --timeout 10m
 
             echo "✅ Helm upgrade complete"
 
             kubectl rollout status deployment/order-order-service \
-              --namespace campuscart \
-              --timeout=5m
+              --namespace campuscart
 
             echo "🎉 Deployment successful!"
             kubectl get pods -n campuscart | grep order

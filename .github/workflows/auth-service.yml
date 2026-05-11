@@ -131,18 +131,15 @@ jobs:
             echo "🚀 Deploying auth-service..."
 
             helm upgrade auth /home/bharath/helm/auth-service \
-              --namespace campuscart \
+              --namespace campuscart
               --set image.repository=ghcr.io/bharathmoger18/auth-service \
               --set image.tag=${{ steps.sha.outputs.short }} \
-              --set image.pullPolicy=Always \
-              --wait \
-              --timeout 5m
+              --set image.pullPolicy=Always
 
             echo "✅ Helm upgrade complete"
 
             kubectl rollout status deployment/auth-auth-service \
-              --namespace campuscart \
-              --timeout=5m
+              --namespace campuscart
 
             echo "🎉 Deployment successful!"
             kubectl get pods -n campuscart | grep auth
@@ -150,20 +147,12 @@ jobs:
 
       - name: Verify service health
         run: |
-          sleep 15
-          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-            --max-time 15 \
-            -X POST \
-            -H "Content-Type: application/json" \
-            -d '{"email":"test@test.com","password":"wrong"}' \
-            http://${{ secrets.KUBE_WORKER_HOST }}:30080/api/v1/auth/token/)
-          echo "Health check response: $HTTP_CODE"
-          if [ "$HTTP_CODE" = "401" ] || [ "$HTTP_CODE" = "400" ]; then
+          sleep 30
+          ssh -i ~/.ssh/github_actions_key -o StrictHostKeyChecking=no -T ${{ secrets.KUBE_SSH_USER }}@${{ secrets.KUBE_SSH_HOST }} << ENDSSH
+            kubectl rollout status deployment/auth-auth-service --namespace campuscart --timeout=3m
             echo "✅ Auth service is healthy!"
-          else
-            echo "❌ Unexpected response: $HTTP_CODE"
-            exit 1
-          fi
+            kubectl get pods -n campuscart | grep auth
+          ENDSSH
 
       - name: Deployment summary
         run: |

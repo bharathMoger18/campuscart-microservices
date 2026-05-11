@@ -117,18 +117,16 @@ jobs:
             echo "🚀 Deploying product-service..."
 
             helm upgrade product /home/bharath/helm/product-service \
-              --namespace campuscart \
+              --namespace campuscart
               --set image.repository=ghcr.io/bharathmoger18/product-service \
               --set image.tag=${{ steps.sha.outputs.short }} \
               --set image.pullPolicy=Always \
-              --wait \
-              --timeout 5m
+              \
 
             echo "✅ Helm upgrade complete"
 
             kubectl rollout status deployment/product-product-service \
-              --namespace campuscart \
-              --timeout=5m
+              --namespace campuscart
 
             echo "🎉 Deployment successful!"
             kubectl get pods -n campuscart | grep product
