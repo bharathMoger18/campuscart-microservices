@@ -8,7 +8,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 
 # ── Core ─────────────────────────────────────────────────────────────────────
-SECRET_KEY = os.getenv("SECRET_KEY", "insecure-default-change-me")
+SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "insecure-default-change-me")
 DEBUG = os.getenv("DEBUG", "False") == "True"
 ALLOWED_HOSTS = os.getenv(
     "ALLOWED_HOSTS",
@@ -89,7 +89,7 @@ DATABASES = {
 
 # ── Redis + Channel Layer ─────────────────────────────────────────────────────
 # Redis URL used by Channel Layer (WebSocket message bus between workers)
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6380/0")
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 
 CHANNEL_LAYERS = {
     "default": {

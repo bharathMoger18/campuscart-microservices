@@ -17,7 +17,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # ─────────────────────────────────────────────
 # SECURITY
 # ─────────────────────────────────────────────
-SECRET_KEY = os.getenv("SECRET_KEY", "fallback-dev-key-change-in-production")
+SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "fallback-dev-key-change-in-production")
 DEBUG = os.getenv("DEBUG", "True") == "True"
 
 # ── KEY PATTERN ──────────────────────────────────────────────────────────────
@@ -191,7 +191,7 @@ SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=60),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
     "ALGORITHM": "HS256",
-    "SIGNING_KEY": os.getenv("SECRET_KEY", "fallback-dev-key-change-in-production"),
+    "SIGNING_KEY": os.getenv("DJANGO_SECRET_KEY", "fallback-dev-key-change-in-production"),
     "AUTH_HEADER_TYPES": ("Bearer",),
 }
 
