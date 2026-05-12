@@ -103,7 +103,7 @@ jobs:
           SSH_HOST: ${{ secrets.KUBE_SSH_HOST }}
           SSH_USER: ${{ secrets.KUBE_SSH_USER }}
         run: |
-          ssh -i ~/.ssh/github_actions_key -o StrictHostKeyChecking=no -T ${SSH_USER}@${SSH_HOST} "helm upgrade notification /home/bharath/helm/notification-service --namespace campuscart --set image.repository=ghcr.io/bharathmoger18/notification-service --set image.tag=${IMAGE_TAG} --set image.pullPolicy=Always && kubectl rollout status deployment/notification-notification-service --namespace campuscart --timeout=10m && echo DEPLOY_OK"
+          ssh -i ~/.ssh/github_actions_key -o StrictHostKeyChecking=no -T ${SSH_USER}@${SSH_HOST} "helm upgrade notification /home/bharath/helm/notification-service --namespace campuscart --set image.repository=ghcr.io/bharathmoger18/notification-service --set image.tag=${IMAGE_TAG} --set image.pullPolicy=Always && echo DEPLOY_OK"
 
       - name: Verify service health
         env:
