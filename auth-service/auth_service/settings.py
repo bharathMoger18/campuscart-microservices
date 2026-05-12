@@ -120,3 +120,4 @@ SPECTACULAR_SETTINGS = {
     "DESCRIPTION": "Authentication and user management for CampusCart",
     "VERSION": "1.0.0",
 }
+# CI/CD test - Tuesday 12 May 2026 10:03:12 AM IST
