@@ -341,3 +341,44 @@ def _handle_payment_failed(payment_intent: dict):
         f"Payment failed: order={order_id}, intent={intent_id}, "
         f"reason={failure_message}"
     )
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def create_checkout_session(request):
+    """
+    POST /api/v1/payments/create-checkout-session/
+    Create a Stripe Checkout Session and return the redirect URL.
+    """
+    import stripe
+    from django.conf import settings
+    stripe.api_key = settings.STRIPE_SECRET_KEY
+
+    order_id = request.data.get("order_id")
+    if not order_id:
+        return Response({"error": "order_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        order = Order.objects.get(id=order_id, buyer_id=request.user.id)
+    except Order.DoesNotExist:
+        return Response({"error": "Order not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    amount_in_paise = int(order.total_price * 100)
+
+    session = stripe.checkout.Session.create(
+        payment_method_types=["card"],
+        line_items=[{
+            "price_data": {
+                "currency": "inr",
+                "product_data": {"name": f"CampusCart Order #{order.id}"},
+                "unit_amount": amount_in_paise,
+            },
+            "quantity": 1,
+        }],
+        mode="payment",
+        success_url=f"http://192.168.122.55:30080/orders/order_detail.html?id={order.id}&payment=success",
+        cancel_url=f"http://192.168.122.55:30080/orders/checkout.html?cancel=true",
+        metadata={"order_id": str(order.id), "buyer_id": str(order.buyer_id)},
+    )
+
+    return Response({"url": session.url})

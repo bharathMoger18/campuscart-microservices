@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Notifications — CampusCart</title>
+    <link rel="stylesheet" href="css/base.css" />
+    <link rel="stylesheet" href="css/layout.css" />
+    <link rel="stylesheet" href="css/components.css" />
+    <style>
+      main.container { max-width: 800px; }
+      .notif-page-header { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem; margin-bottom:1.5rem; }
+      .notif-page-header h1 { font-family:var(--font-display); font-size:1.8rem; font-weight:800; letter-spacing:-.03em; color:var(--text); }
+      .notif-header-actions { display:flex; gap:.5rem; }
+      .notif-list { display:flex; flex-direction:column; gap:.75rem; }
+      .notif-item { background:var(--card); border:1px solid var(--border); border-radius:var(--radius); padding:1rem 1.25rem; display:flex; justify-content:space-between; align-items:flex-start; gap:1rem; transition:border-color var(--transition); }
+      .notif-item.unread { border-color:rgba(108,99,255,.3); background:rgba(108,99,255,.04); }
+      .notif-item.unread::before { content:''; display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--primary); flex-shrink:0; margin-top:.35rem; }
+      .notif-body { flex:1; min-width:0; }
+      .notif-title { font-weight:700; color:var(--text); font-size:.95rem; margin-bottom:.35rem; }
+      .notif-text { color:var(--text-2); font-size:.88rem; line-height:1.5; }
+      .notif-meta { font-size:.75rem; color:var(--text-3); margin-top:.5rem; display:flex; align-items:center; gap:.5rem; }
+      .notif-type-badge { background:var(--bg-3); border:1px solid var(--border); padding:.15rem .5rem; border-radius:999px; font-size:.7rem; font-weight:600; color:var(--text-3); text-transform:uppercase; letter-spacing:.05em; }
+      .notif-actions { display:flex; gap:.4rem; align-items:center; flex-shrink:0; }
+      .btn-open-notif { background:var(--primary-glow); border:1px solid rgba(108,99,255,.3); color:var(--primary-light); padding:.35rem .8rem; border-radius:var(--radius-sm); cursor:pointer; font-size:.8rem; font-weight:600; transition:all var(--transition); font-family:var(--font-body); }
+      .btn-open-notif:hover { background:rgba(108,99,255,.2); }
+      .btn-mark-read { background:var(--bg-3); border:1px solid var(--border); color:var(--text-2); padding:.35rem .8rem; border-radius:var(--radius-sm); cursor:pointer; font-size:.8rem; font-weight:600; transition:all var(--transition); font-family:var(--font-body); }
+      .btn-mark-read:hover { border-color:var(--primary); color:var(--primary-light); }
+      .notif-pagination { display:flex; gap:.4rem; justify-content:center; margin-top:1.5rem; flex-wrap:wrap; }
+      .page-pill { padding:.4rem .85rem; border-radius:var(--radius-sm); border:1px solid var(--border); background:var(--bg-3); color:var(--text-2); cursor:pointer; font-size:.85rem; font-weight:600; transition:all var(--transition); }
+      .page-pill.active { background:var(--primary); border-color:var(--primary); color:#fff; }
+      .page-pill:hover:not(.active) { border-color:var(--primary); color:var(--primary-light); }
+      .empty-notif { text-align:center; padding:4rem 2rem; color:var(--text-3); }
+      .empty-notif .empty-icon { font-size:3rem; margin-bottom:1rem; }
+      .empty-notif h2 { font-family:var(--font-display); font-size:1.2rem; color:var(--text); margin-bottom:.5rem; }
+    </style>
+  </head>
+  <body>
+    <header id="site-navbar"></header>
+    <main class="container">
+      <div class="notif-page-header">
+        <h1>🔔 Notifications</h1>
+        <div class="notif-header-actions">
+          <button id="markAllBtn" class="btn btn-ghost">Mark all read</button>
+          <button id="refreshBtn" class="btn btn-primary">Refresh</button>
+        </div>
+      </div>
+      <div id="notifList" class="notif-list">
+        <div class="loading">Loading notifications...</div>
+      </div>
+      <div id="pagination" class="notif-pagination"></div>
+    </main>
+    <footer id="site-footer"></footer>
+    <script type="module" src="js/main.js"></script>
+    <script type="module">
+      import { fetchNotifications, markAsRead, markAllRead, startPolling } from './js/core/notifications.js';
+      import { showAlert, parseErrors } from './js/core/utils.js';
+
+      const listEl = document.getElementById('notifList');
+      const markAllBtn = document.getElementById('markAllBtn');
+      const refreshBtn = document.getElementById('refreshBtn');
+      const paginationEl = document.getElementById('pagination');
+      let currentPage = 1, totalPages = 1;
+
+      async function load(page = 1) {
+        listEl.innerHTML = '<div class="loading">Loading notifications...</div>';
+        try {
+          const data = await fetchNotifications(page);
+          renderList(data);
+        } catch {
+          listEl.innerHTML = '<div class="empty-notif"><div class="empty-icon">⚠️</div><h2>Failed to load</h2></div>';
+        }
+      }
+
+      function renderList(data) {
+        const results = data.results || [];
+        totalPages = data.total_pages || Math.ceil((data.count || results.length) / 10);
+        currentPage = parseInt(new URLSearchParams(location.search).get('page')) || currentPage;
+
+        if (!results.length) {
+          listEl.innerHTML = '<div class="empty-notif"><div class="empty-icon">🔔</div><h2>No notifications yet</h2><p>You\'re all caught up!</p></div>';
+          paginationEl.innerHTML = '';
+          return;
+        }
+
+        listEl.innerHTML = results.map(n => {
+          const isChat = n.url && n.url.includes('/chat/');
+          return `
+            <div class="notif-item ${n.read ? '' : 'unread'}" data-id="${n.id}">
+              <div class="notif-body">
+                <div class="notif-title">${escapeHtml(n.title)}</div>
+                <div class="notif-text">${escapeHtml(n.body)}</div>
+                <div class="notif-meta">
+                  ${new Date(n.created_at).toLocaleString('en-IN')}
+                  ${n.type ? `<span class="notif-type-badge">${escapeHtml(n.type)}</span>` : ''}
+                </div>
+              </div>
+              <div class="notif-actions">
+                ${isChat ? `<button class="btn-open-notif btn-open">Open</button>` : ''}
+                ${!n.read ? `<button class="btn-mark-read btn-mark">Mark read</button>` : ''}
+              </div>
+            </div>`;
+        }).join('');
+
+        listEl.querySelectorAll('.btn-open').forEach(btn => {
+          btn.addEventListener('click', e => {
+            const id = e.target.closest('.notif-item').dataset.id;
+            const n = results.find(x => String(x.id) === String(id));
+            if (n?.url) {
+              if (!n.read) markAsRead(n.id).catch(() => {});
+              let url = n.url;
+              if (url.includes('/chat/') && !url.includes('chat.html')) {
+                const convId = url.split('/chat/')[1].replace('/', '').trim();
+                url = `/chat.html?conversation=${convId}`;
+              }
+              window.location.href = url;
+            }
+          });
+        });
+
+        listEl.querySelectorAll('.btn-mark').forEach(btn => {
+          btn.addEventListener('click', async e => {
+            const id = e.target.closest('.notif-item').dataset.id;
+            try { await markAsRead(id); showAlert('Marked as read', 'success'); load(currentPage); }
+            catch (err) { showAlert(parseErrors(err.data) || 'Failed', 'error'); }
+          });
+        });
+
+        renderPagination();
+      }
+
+      function renderPagination() {
+        if (totalPages <= 1) { paginationEl.innerHTML = ''; return; }
+        paginationEl.innerHTML = Array.from({length: totalPages}, (_, i) => i + 1)
+          .map(i => `<button class="page-pill ${i === currentPage ? 'active' : ''}" data-page="${i}">${i}</button>`)
+          .join('');
+        paginationEl.querySelectorAll('.page-pill').forEach(b => {
+          b.addEventListener('click', () => { currentPage = Number(b.dataset.page); load(currentPage); window.scrollTo({top:0,behavior:'smooth'}); });
+        });
+      }
+
+      markAllBtn.addEventListener('click', async () => {
+        if (!confirm('Mark all as read?')) return;
+        try { await markAllRead(); showAlert('All marked read', 'success'); load(1); }
+        catch (err) { showAlert(parseErrors(err.data) || 'Failed', 'error'); }
+      });
+
+      refreshBtn.addEventListener('click', () => load(currentPage));
+      load(1);
+      startPolling();
+
+      function escapeHtml(s) {
+        if (!s) return '';
+        return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;');
+      }
+    </script>
+  </body>
+</html>

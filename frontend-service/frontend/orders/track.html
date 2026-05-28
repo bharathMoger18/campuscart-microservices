@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Order Tracking — CampusCart</title>
+    <link rel="stylesheet" href="/css/base.css" />
+    <link rel="stylesheet" href="/css/layout.css" />
+    <link rel="stylesheet" href="/css/components.css" />
+    <style>
+      .page-header{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:1rem;margin-bottom:2rem}
+      .page-header h1{font-family:var(--font-display);font-size:1.8rem;font-weight:800;letter-spacing:-.03em;color:var(--text)}
+      .tracking-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:1.5rem;margin-bottom:1.5rem}
+      .tracking-card h3{font-family:var(--font-display);font-size:1rem;font-weight:700;color:var(--text);margin-bottom:1.25rem;padding-bottom:.75rem;border-bottom:1px solid var(--border)}
+      .status-progress{display:flex;justify-content:space-between;align-items:flex-start;position:relative;margin-bottom:2rem;padding:0 1rem}
+      .status-progress::before{content:'';position:absolute;top:11px;left:1rem;right:1rem;height:3px;background:var(--border);z-index:0}
+      .status-step{position:relative;text-align:center;flex:1;z-index:1}
+      .status-step .dot{width:24px;height:24px;border-radius:50%;background:var(--bg-3);border:2px solid var(--border);margin:0 auto .5rem;transition:all .3s}
+      .status-step.completed .dot{background:var(--primary);border-color:var(--primary);box-shadow:0 0 12px var(--primary-glow)}
+      .status-step.active .dot{background:#4ade80;border-color:#4ade80;box-shadow:0 0 12px rgba(34,197,94,.3)}
+      .status-step label{font-size:.75rem;color:var(--text-3);font-weight:600;display:block}
+      .status-step.completed label,.status-step.active label{color:var(--text)}
+      .timeline{border-left:2px solid var(--border);margin-left:12px;padding-left:1.25rem;display:flex;flex-direction:column;gap:1rem}
+      .timeline-step{position:relative}
+      .timeline-step::before{content:'';position:absolute;left:-1.5rem;top:6px;width:10px;height:10px;border-radius:50%;background:var(--bg-3);border:2px solid var(--border)}
+      .timeline-step.done::before{background:var(--primary);border-color:var(--primary)}
+      .timeline-step .content{background:var(--bg-3);border:1px solid var(--border);border-radius:var(--radius-sm);padding:.75rem 1rem}
+      .timeline-step .content h4{font-size:.9rem;font-weight:700;color:var(--text);margin:0 0 .25rem}
+      .timeline-step .content p{font-size:.82rem;color:var(--text-2);margin:0}
+      .timeline-step .content small{font-size:.75rem;color:var(--text-3)}
+      .review-form{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:1.5rem;margin-top:1.5rem}
+      .review-form h3{font-family:var(--font-display);font-size:1rem;font-weight:700;color:var(--text);margin-bottom:1rem}
+    </style>
+  </head>
+  <body>
+    <header id="site-navbar"></header>
+    <main class="container">
+      <div class="page-header">
+        <h1>Order Tracking</h1>
+        <a class="btn btn-ghost" href="/orders/my_orders.html">&#8592; My Orders</a>
+      </div>
+      <div class="tracking-card">
+        <h3>Delivery Progress</h3>
+        <div id="progressContainer" class="status-progress"></div>
+      </div>
+      <div class="tracking-card">
+        <h3>Timeline</h3>
+        <div id="timelineContainer" class="timeline">
+          <div class="loading">Loading tracking info...</div>
+        </div>
+      </div>
+      <div id="reviewContainer"></div>
+    </main>
+    <footer id="site-footer"></footer>
+    <script type="module" src="/js/main.js"></script>
+    <script type="module" src="/orders/js/track.js"></script>
+  </body>
+</html>

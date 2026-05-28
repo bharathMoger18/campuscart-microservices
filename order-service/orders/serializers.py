@@ -173,3 +173,14 @@ class OrderTrackingSerializer(serializers.Serializer):
     timeline = OrderStatusHistorySerializer(many=True)
     created_at = serializers.DateTimeField()
     updated_at = serializers.DateTimeField()
+
+
+class RefundRequestSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = None  # set below after import
+        fields = ["id", "order", "buyer_id", "seller_id", "reason", "status", "admin_note", "created_at", "resolved_at"]
+        read_only_fields = fields
+
+# Late-bind model to avoid circular import issues
+from .models import RefundRequest as _RefundRequest
+RefundRequestSerializer.Meta.model = _RefundRequest

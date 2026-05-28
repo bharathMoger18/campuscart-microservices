@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import create_payment_intent, stripe_webhook
+from .views import create_payment_intent, stripe_webhook, create_checkout_session
 
 # ─────────────────────────────────────────────────────────────
 # Payments URLs
@@ -27,6 +27,11 @@ from .views import create_payment_intent, stripe_webhook
 
 urlpatterns = [
     # JWT protected — buyer creates payment intent for their order
+    path(
+        "payments/create-checkout-session/",
+        create_checkout_session,
+        name="create-checkout-session",
+    ),
     path(
         "payments/create-intent/",
         create_payment_intent,

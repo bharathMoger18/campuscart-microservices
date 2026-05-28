@@ -29,6 +29,7 @@ class Order(models.Model):
 
     # ── ORDER STATUS ──────────────────────────────────────────
     STATUS_PENDING = "PENDING"
+    STATUS_PAID = "PAID"
     STATUS_CONFIRMED = "CONFIRMED"
     STATUS_SHIPPED = "SHIPPED"
     STATUS_DELIVERED = "DELIVERED"
@@ -37,6 +38,7 @@ class Order(models.Model):
 
     STATUS_CHOICES = [
         (STATUS_PENDING, "Pending"),
+        (STATUS_PAID, "Paid"),
         (STATUS_CONFIRMED, "Confirmed"),
         (STATUS_SHIPPED, "Shipped"),
         (STATUS_DELIVERED, "Delivered"),
@@ -108,12 +110,12 @@ class Order(models.Model):
     # you cannot deliver an order that was cancelled.
     # ──────────────────────────────────────────────────────────
     VALID_TRANSITIONS = {
-        STATUS_PENDING: [STATUS_CONFIRMED, STATUS_CANCELLED],
-        STATUS_CONFIRMED: [STATUS_SHIPPED, STATUS_CANCELLED],
-        STATUS_SHIPPED: [STATUS_DELIVERED],
+        STATUS_PENDING: [STATUS_PAID, STATUS_SHIPPED, STATUS_CANCELLED],
+        STATUS_PAID: [STATUS_SHIPPED, STATUS_CANCELLED],
+        STATUS_SHIPPED: [STATUS_DELIVERED, STATUS_COMPLETED],
         STATUS_DELIVERED: [STATUS_COMPLETED],
-        STATUS_COMPLETED: [],       # terminal state — no further transitions
-        STATUS_CANCELLED: [],       # terminal state — no further transitions
+        STATUS_COMPLETED: [],
+        STATUS_CANCELLED: [],
     }
 
     def can_transition_to(self, new_status: str) -> bool:
@@ -303,3 +305,47 @@ class OrderStatusHistory(models.Model):
             f"OrderStatusHistory(order={self.order_id}, "
             f"{self.from_status}→{self.to_status})"
         )
+
+
+class RefundRequest(models.Model):
+    STATUS_PENDING = "PENDING"
+    STATUS_APPROVED = "APPROVED"
+    STATUS_REJECTED = "REJECTED"
+
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending"),
+        (STATUS_APPROVED, "Approved"),
+        (STATUS_REJECTED, "Rejected"),
+    ]
+
+    order = models.OneToOneField(
+        Order,
+        on_delete=models.CASCADE,
+        related_name="refund_request",
+    )
+    buyer_id = models.PositiveIntegerField()
+    seller_id = models.PositiveIntegerField()
+    reason = models.TextField()
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default=STATUS_PENDING,
+    )
+    admin_note = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+
+    def approve(self, actor_id=None, note=""):
+        self.status = self.STATUS_APPROVED
+        self.admin_note = note
+        self.resolved_at = timezone.now()
+        self.save()
+
+    def reject(self, actor_id=None, note=""):
+        self.status = self.STATUS_REJECTED
+        self.admin_note = note
+        self.resolved_at = timezone.now()
+        self.save()
+
+    def __str__(self):
+        return f"RefundRequest(order={self.order_id}, status={self.status})"
