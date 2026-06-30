@@ -63,7 +63,7 @@ WSGI_APPLICATION = "auth_service.wsgi.application"
 
 DATABASES = {
     "default": {
-        "ENGINE": "django.db.backends.postgresql",
+        "ENGINE": "django_prometheus.db.backends.postgresql",",
         "NAME": os.environ.get("DB_NAME", "auth_db"),
         "USER": os.environ.get("DB_USER", "auth_user"),
         "PASSWORD": os.environ.get("DB_PASSWORD", ""),

@@ -9,9 +9,21 @@ from django.contrib.auth.tokens import default_token_generator
 from django.utils.http import urlsafe_base64_decode
 from django.core.exceptions import ObjectDoesNotExist
 from django.contrib.auth.hashers import make_password
+from rest_framework_simplejwt.views import TokenObtainPairView
+from rest_framework_simplejwt.exceptions import TokenError, InvalidToken
 
 from .serializers import RegisterSerializer, UserSerializer
 from .utils import send_verification_email, send_password_reset_email
+
+from .metrics import (
+    user_registrations_total,
+    email_verifications_total,
+    password_resets_total,
+    auth_operation_duration_seconds,
+    login_attempts_total,
+    jwt_tokens_issued_total,
+)
+
 
 User = get_user_model()
 
@@ -29,6 +41,20 @@ class RegisterView(generics.CreateAPIView):
     queryset = User.objects.all()
     permission_classes = (permissions.AllowAny,)
     serializer_class = RegisterSerializer
+
+    def create(self, request, *args, **kwargs):
+        # overriding create() (not just perform_create) so we can count
+        # validation failures too — perform_create only runs on success
+        with auth_operation_duration_seconds.labels(operation="register").time():
+            serializer = self.get_serializer(data=request.data)
+            if not serializer.is_valid():
+                user_registrations_total.labels(status="failure").inc()
+                return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+            self.perform_create(serializer)
+            user_registrations_total.labels(status="success").inc()
+            headers = self.get_success_headers(serializer.data)
+            return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
     def perform_create(self, serializer):
         user = serializer.save(is_active=False)
@@ -56,6 +82,37 @@ class MeView(APIView):
 
 
 # ---------------------------
+# Login (JWT)
+# ---------------------------
+
+class LoginView(TokenObtainPairView):
+    """
+    POST /api/v1/auth/login/
+    Wraps SimpleJWT's TokenObtainPairView so we can record
+    login_attempts_total and jwt_tokens_issued_total.
+    Use this instead of TokenObtainPairView directly in urls.py.
+    """
+
+    def post(self, request, *args, **kwargs):
+        with auth_operation_duration_seconds.labels(operation="login").time():
+            serializer = self.get_serializer(data=request.data)
+            try:
+                serializer.is_valid(raise_exception=True)
+            except (TokenError, InvalidToken):
+                login_attempts_total.labels(status="invalid_credentials").inc()
+                return Response(
+                    {"detail": "Invalid credentials"},
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
+
+            login_attempts_total.labels(status="success").inc()
+            jwt_tokens_issued_total.labels(token_type="access").inc()
+            jwt_tokens_issued_total.labels(token_type="refresh").inc()
+
+            return Response(serializer.validated_data, status=status.HTTP_200_OK)
+
+
+# ---------------------------
 # Email Verification
 # ---------------------------
 
@@ -80,8 +137,10 @@ class VerifyEmailView(APIView):
         if default_token_generator.check_token(user, token):
             user.is_active = True
             user.save(update_fields=["is_active"])
+            email_verifications_total.labels(status="success").inc()
             return Response({"detail": "Email verified successfully!"})
 
+        email_verifications_total.labels(status="expired_token").inc()
         return Response(
             {"detail": "Invalid or expired token."},
             status=status.HTTP_400_BAD_REQUEST
@@ -105,6 +164,7 @@ class RequestPasswordResetView(APIView):
         try:
             user = User.objects.get(email=email)
             send_password_reset_email(user, request)
+            password_resets_total.labels(status="requested").inc()
         except User.DoesNotExist:
             pass  # Intentional — do not reveal if email exists
         return Response(
@@ -131,6 +191,7 @@ class PasswordResetConfirmView(APIView):
             )
 
         if not default_token_generator.check_token(user, token):
+            password_resets_total.labels(status="expired").inc()
             return Response(
                 {"detail": "Invalid or expired token."},
                 status=status.HTTP_400_BAD_REQUEST
@@ -145,6 +206,7 @@ class PasswordResetConfirmView(APIView):
 
         user.password = make_password(new_password)
         user.save(update_fields=["password"])
+        password_resets_total.labels(status="completed").inc()
         return Response({"detail": "Password reset successful."})
 
 

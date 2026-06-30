@@ -59,7 +59,7 @@ ASGI_APPLICATION = "product_service.asgi.application"
 # ─── Database ────────────────────────────────────────────────────────
 DATABASES = {
     "default": {
-        "ENGINE": "django.db.backends.postgresql",
+        "ENGINE": "django_prometheus.db.backends.postgresql",
         "NAME": os.getenv("DB_NAME", "product_db"),
         "USER": os.getenv("DB_USER", "product_user"),
         "PASSWORD": os.getenv("DB_PASSWORD", "product_password"),
