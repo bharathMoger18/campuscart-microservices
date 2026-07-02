@@ -72,6 +72,13 @@ class ReviewSerializer(serializers.ModelSerializer):
         Create or update a review.
         One review per user per product — if review exists, update it.
         user_id is injected by the view from the JWT token.
+
+        _was_created stashed on the returned instance (not a model field —
+        just an in-memory attribute) so the view can tell create vs. update
+        apart. Without this, reviews_submitted_total in views.py.perform_create
+        can't distinguish "brand new review" from "user re-submitted/edited
+        their existing review via this same endpoint", and was previously
+        counting both as new submissions.
         """
         user_id = validated_data["user_id"]
         product = validated_data["product"]
@@ -84,4 +91,5 @@ class ReviewSerializer(serializers.ModelSerializer):
                 "comment": validated_data.get("comment", ""),
             }
         )
+        review._was_created = created
         return review

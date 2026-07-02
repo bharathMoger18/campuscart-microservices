@@ -5,6 +5,8 @@ from .models import Wishlist, WishlistItem
 from .serializers import WishlistSerializer
 from products.models import Product
 
+from products.metrics import wishlist_additions_total
+
 
 class WishlistViewSet(viewsets.ViewSet):
     """
@@ -75,6 +77,14 @@ class WishlistViewSet(viewsets.ViewSet):
 
         if created:
             message = "Product added to wishlist."
+            # Only on a genuinely NEW addition — re-adding a product
+            # already in the wishlist (created=False) is a no-op for the
+            # user, so it shouldn't inflate the "future demand" signal
+            # metrics.py documents this counter as ("Leading indicator for
+            # future orders").
+            wishlist_additions_total.labels(
+                category=product.category or "uncategorized"
+            ).inc()
         else:
             message = "Product already in wishlist."
 
