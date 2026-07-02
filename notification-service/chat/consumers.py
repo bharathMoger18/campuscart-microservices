@@ -13,10 +13,18 @@ KEY DIFFERENCES from monolith:
   - No User DB lookup (using MicroserviceUser from scope)
   - sender_name fetched from auth-service ONCE at connect, cached on self
   - Push notifications call push.utils with user_id integers (no User objects)
+
+METRICS NOTE (added 2026-06-30): connection_type is hardcoded to "chat"
+throughout this file. metrics.py documents "notifications" as a second
+possible value, but asgi.py only ever routes chat.routing — there is no
+second consumer in this codebase, so "notifications" is currently unused/
+reserved for a future non-chat WS consumer, not something this file can
+produce.
 """
 
 import json
 import logging
+import time
 import httpx
 from urllib.parse import parse_qs
 
@@ -26,6 +34,16 @@ from django.conf import settings
 from django.contrib.auth.models import AnonymousUser
 
 from .models import Conversation, Message
+
+from notification_service.metrics import (
+    ws_connections_active,
+    ws_connect_total,
+    ws_disconnect_total,
+    messages_sent_total,
+    message_delivery_seconds,
+    redis_channel_publish_total,
+    redis_channel_receive_total,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +83,16 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         Called when WebSocket client connects.
         Validates auth, checks participation, joins Redis group.
         """
+        # Tracks whether THIS consumer instance actually completed accept().
+        # Used in disconnect() below so we never decrement
+        # ws_connections_active / count a disconnect for a connection that
+        # was rejected during connect() and never counted as connected in
+        # the first place (Channels does not call disconnect() for
+        # connections that were closed inside connect() before accept(),
+        # but this flag is cheap insurance against double-counting if that
+        # behavior ever changes across Channels versions).
+        self._ws_connected = False
+
         # Get user from scope — set by TokenAuthMiddleware in asgi.py
         user = self.scope.get("user")
 
@@ -103,6 +131,14 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         # Accept the WebSocket connection
         await self.accept()
 
+        # Connection is now genuinely live — only past this point do we
+        # count it. Rejected attempts above (4001/4003) never reach here,
+        # consistent with ws_connections_active's purpose: "current number
+        # of active WebSocket connections."
+        ws_connections_active.labels(connection_type="chat").inc()
+        ws_connect_total.labels(connection_type="chat").inc()
+        self._ws_connected = True
+
         # Notify client they connected successfully
         await self.send_json({
             "type": "connection_established",
@@ -123,6 +159,16 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
                 self.room_group_name,
                 self.channel_name,
             )
+
+        # Only decrement/count if this instance actually completed connect()
+        # — see _ws_connected comment above.
+        if getattr(self, "_ws_connected", False):
+            ws_connections_active.labels(connection_type="chat").dec()
+            close_code_label = str(code) if code is not None else "unknown"
+            ws_disconnect_total.labels(
+                connection_type="chat", close_code=close_code_label
+            ).inc()
+
         logger.info(
             "WebSocket disconnected: user_id=%s conversation=%s code=%s",
             getattr(self, "user_id", "?"), self.conversation_id, code
@@ -156,12 +202,32 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
     async def _handle_new_message(self, text: str):
         """
         Save message to DB, broadcast to Redis group, trigger push notifications.
+
+        message_delivery_seconds timing (added 2026-06-30): starts here,
+        stops right after the group_send() broadcast below completes.
+        Deliberately does NOT include _send_push_notifications — that makes
+        blocking pywebpush HTTP calls per offline recipient, and folding
+        that into "message delivery" would make slow push delivery look
+        like a Redis/network problem, which is what this histogram's SLO
+        comment in metrics.py is actually meant to catch. This is
+        server-side processing + Redis publish latency, an approximation
+        of true end-to-end delivery (no client-side delivery-confirmation
+        handshake exists in this protocol today).
         """
         if not text or not text.strip():
             return
 
+        delivery_start = time.monotonic()
+
         # Save to database (sync DB operation wrapped in async)
         msg = await self._save_message(text.strip())
+
+        # messages_sent_total: only "text" is possible — Message has no
+        # type field, so this is the only label value this counter will
+        # ever record. ("image" would need a model + consumer change;
+        # "order_update" is architecturally a different event entirely —
+        # see file-level docstring.)
+        messages_sent_total.labels(message_type="text").inc()
 
         # Build payload for broadcasting
         payload = {
@@ -177,10 +243,31 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
 
         # Broadcast to ALL clients in this conversation group (via Redis)
         # This reaches users connected to OTHER Daphne workers too
-        await self.channel_layer.group_send(
-            self.room_group_name,
-            payload,
-        )
+        #
+        # Wrapped in try/except (new 2026-06-30): previously an unreachable
+        # Redis channel layer would raise here uncaught, propagating out of
+        # receive_json entirely. The message is already saved to the DB at
+        # this point, so a publish failure shouldn't be fatal — the
+        # recipient will still see it on next load/reconnect. We log +
+        # record the failure instead of crashing the consumer.
+        try:
+            await self.channel_layer.group_send(
+                self.room_group_name,
+                payload,
+            )
+            redis_channel_publish_total.labels(
+                channel_type="chat", status="success"
+            ).inc()
+        except Exception as e:
+            redis_channel_publish_total.labels(
+                channel_type="chat", status="failure"
+            ).inc()
+            logger.warning(
+                "Redis publish failed for conversation=%s: %s",
+                self.conversation_id, e
+            )
+
+        message_delivery_seconds.observe(time.monotonic() - delivery_start)
 
         # Send push notifications to offline participants
         # (participants who are not currently connected via WebSocket)
@@ -201,16 +288,31 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
 
         await self._mark_as_read(msg)
 
-        # Broadcast read receipt so sender sees "read" indicator
-        await self.channel_layer.group_send(
-            self.room_group_name,
-            {
-                "type": "chat_read_receipt",
-                "message_id": message_id,
-                "reader_id": self.user_id,
-                "reader_name": self.sender_name,
-            },
-        )
+        # Broadcast read receipt so sender sees "read" indicator.
+        # Same try/except pattern as _handle_new_message above — the read
+        # state is already saved to DB, so a publish failure here just
+        # means the sender's "read" indicator updates late, not never.
+        try:
+            await self.channel_layer.group_send(
+                self.room_group_name,
+                {
+                    "type": "chat_read_receipt",
+                    "message_id": message_id,
+                    "reader_id": self.user_id,
+                    "reader_name": self.sender_name,
+                },
+            )
+            redis_channel_publish_total.labels(
+                channel_type="chat", status="success"
+            ).inc()
+        except Exception as e:
+            redis_channel_publish_total.labels(
+                channel_type="chat", status="failure"
+            ).inc()
+            logger.warning(
+                "Redis publish failed (read receipt) for conversation=%s: %s",
+                self.conversation_id, e
+            )
 
     # ─────────────────────────────────────────────────────────────────────────
     # EVENT HANDLERS (receive from Redis group, send to WebSocket)
@@ -224,11 +326,20 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         NOTE: Method name uses underscore (chat_message) but Django Channels
         maps it from dot-notation type "chat.message" by replacing . with _.
         Here we use "chat_message" as both type and method name.
+
+        redis_channel_receive_total increments here regardless of whether
+        send_json below succeeds — reaching this handler at all means Redis
+        successfully delivered the event to this consumer instance, which
+        is what "received from the channel layer" means. Whether it then
+        reaches the actual browser is a separate WS-level concern this
+        counter isn't tracking.
         """
+        redis_channel_receive_total.labels(channel_type="chat").inc()
         await self.send_json(event)
 
     async def chat_read_receipt(self, event):
         """Receives read receipt from Redis group, forwards to client."""
+        redis_channel_receive_total.labels(channel_type="chat").inc()
         await self.send_json(event)
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -282,6 +393,9 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         Note: We send push to ALL participants (including potentially connected ones).
         Push notification services (browsers) are smart enough to suppress
         notifications if the app is in focus.
+
+        All push_* metrics are recorded inside push/utils.py itself (closer
+        to the actual pywebpush calls), not here.
         """
         try:
             from push.utils import send_push_to_user_id

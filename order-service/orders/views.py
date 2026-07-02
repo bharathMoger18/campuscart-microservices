@@ -16,6 +16,15 @@ from .serializers import (
 from cart.models import Cart, CartItem
 from cart.serializers import fetch_product
 
+from .metrics import (
+    orders_created_total,
+    orders_status_transitions_total,
+    refund_requests_total,
+    active_carts_gauge,
+    payment_attempts_total,
+    checkout_total_duration_seconds,
+)
+
 logger = logging.getLogger(__name__)
 
 import requests as http_requests
@@ -31,6 +40,23 @@ def notify_user(user_id, title, body, url, type_, data, jwt_token):
         )
     except Exception as e:
         logger.error(f'Failed to send notification to user_id={user_id}: {e}')
+
+
+# Known refund reason categories — keeps refund_requests_total bounded in cardinality.
+# `reason` arrives as free text from the buyer (see refund_request below). Using the
+# raw string as a label value would create a new Prometheus time series per unique
+# sentence — the same high-cardinality trap flagged for user_email/user_id labels.
+# Anything that doesn't match a known category collapses to "other".
+REFUND_REASON_CATEGORIES = {
+    "item_not_received": "item_not_received",
+    "wrong_item": "wrong_item",
+    "changed_mind": "changed_mind",
+}
+
+
+def categorize_refund_reason(raw_reason: str) -> str:
+    key = raw_reason.strip().lower().replace(" ", "_")
+    return REFUND_REASON_CATEGORIES.get(key, "other")
 
 
 class IsOrderParticipant(permissions.BasePermission):
@@ -117,9 +143,18 @@ class OrderViewSet(viewsets.ReadOnlyModelViewSet):
             Payment.objects.create(order=order, method=payment_method, amount=total, status=Order.PAYMENT_PENDING)
             OrderStatusHistory.objects.create(order=order, from_status="", to_status=Order.STATUS_PENDING, actor_id=request.user.id, note="Order placed by buyer", timestamp=timezone.now())
             created_orders.append(order)
+            # Every order created here starts PENDING/PAYMENT_PENDING — payment
+            # is confirmed later via simulate_payment or update_status. "confirmed"
+            # never fires at creation time in the current flow.
+            orders_created_total.labels(status="pending_payment").inc()
             jwt_token = str(request.auth) if request.auth else ''
             notify_user(user_id=seller_id, title='New Order Received!', body=f'Order #{order.id} — ₹{total} — {len(items)} item(s)', url='/seller/orders.html', type_='order', data={'order_id': order.id}, jwt_token=jwt_token)
         CartItem.objects.filter(id__in=ordered_cart_item_ids).delete()
+        # Cart fully converted to order(s) and cleared — no longer "active".
+        # NOTE: there's no matching .inc() in this file. That belongs in the
+        # cart add-item view (cart/views.py), which isn't part of this file —
+        # without it, active_carts_gauge will only ever trend negative.
+        active_carts_gauge.dec()
         serializer = OrderSerializer(created_orders, many=True)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
@@ -128,10 +163,12 @@ class OrderViewSet(viewsets.ReadOnlyModelViewSet):
         order = self.get_object()
         if order.buyer_id != request.user.id:
             return Response({"error": "Only the buyer can cancel this order."}, status=status.HTTP_403_FORBIDDEN)
+        previous_status = order.status
         try:
             order.set_status(Order.STATUS_CANCELLED, actor_id=request.user.id, note="Cancelled by buyer")
         except ValueError as exc:
             return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        orders_status_transitions_total.labels(from_status=previous_status, to_status=Order.STATUS_CANCELLED).inc()
         return Response(OrderSerializer(order).data)
 
     @action(detail=True, methods=["get"], url_path="track")
@@ -149,10 +186,12 @@ class OrderViewSet(viewsets.ReadOnlyModelViewSet):
         allowed = [s for s, _ in Order.STATUS_CHOICES]
         if not new_status or new_status not in allowed:
             return Response({"error": "Invalid status."}, status=status.HTTP_400_BAD_REQUEST)
+        previous_status = order.status
         try:
             order.set_status(new_status, actor_id=request.user.id, note=request.data.get("note"))
         except ValueError as exc:
             return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        orders_status_transitions_total.labels(from_status=previous_status, to_status=new_status).inc()
         if new_status == Order.STATUS_PAID:
             order.payment_status = Order.PAYMENT_SUCCESS
             order.save(update_fields=["payment_status", "updated_at"])
@@ -169,10 +208,12 @@ class OrderViewSet(viewsets.ReadOnlyModelViewSet):
             return Response({"error": "Only buyer can confirm delivery."}, status=status.HTTP_403_FORBIDDEN)
         if order.status not in [Order.STATUS_SHIPPED, Order.STATUS_DELIVERED]:
             return Response({"error": "Order must be shipped first."}, status=status.HTTP_400_BAD_REQUEST)
+        previous_status = order.status
         try:
             order.set_status(Order.STATUS_DELIVERED, actor_id=request.user.id, note="Delivery confirmed by buyer")
         except ValueError as exc:
             return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        orders_status_transitions_total.labels(from_status=previous_status, to_status=Order.STATUS_DELIVERED).inc()
         jwt_token = str(request.auth) if request.auth else ""
         notify_user(user_id=order.seller_id, title="📦 Delivery Confirmed", body=f"Buyer confirmed delivery for order #{order.id}.", url="/seller/orders.html", type_="order_delivered", data={"order_id": order.id}, jwt_token=jwt_token)
         return Response(OrderSerializer(order).data)
@@ -187,9 +228,20 @@ class OrderViewSet(viewsets.ReadOnlyModelViewSet):
         payment.save(update_fields=["status"])
         order.payment_status = Order.PAYMENT_SUCCESS
         order.save(update_fields=["payment_status", "updated_at"])
+        # This is a mock — there's no real Stripe call here, so it always
+        # records "success". payment_failures_total, stripe_webhook_events_total,
+        # and stripe_api_duration_seconds all need an actual Stripe integration
+        # before they can report anything real — wiring them here would be fake data.
+        payment_attempts_total.labels(status="success").inc()
+        # Approximates checkout duration as order-creation → payment-confirmation
+        # time. Not true cart-add → payment time, since Order has no field
+        # tracking when the item was first added to cart.
+        checkout_total_duration_seconds.observe((timezone.now() - order.created_at).total_seconds())
         if order.status == Order.STATUS_PENDING:
+            previous_status = order.status
             try:
                 order.set_status(Order.STATUS_PAID, actor_id=request.user.id, note="Payment confirmed via Stripe")
+                orders_status_transitions_total.labels(from_status=previous_status, to_status=Order.STATUS_PAID).inc()
             except ValueError:
                 pass
         return Response(OrderSerializer(order).data)
@@ -207,6 +259,7 @@ class OrderViewSet(viewsets.ReadOnlyModelViewSet):
         if not reason:
             return Response({"error": "Refund reason is required."}, status=400)
         refund = RefundRequest.objects.create(order=order, buyer_id=order.buyer_id, seller_id=order.seller_id, reason=reason)
+        refund_requests_total.labels(reason=categorize_refund_reason(reason), status="pending").inc()
         jwt_token = str(request.auth) if request.auth else ''
         notify_user(user_id=order.seller_id, title="Refund Requested", body=f"Buyer requested refund for order #{order.id}.", url=f"/seller/order_detail.html?id={order.id}", type_="refund", data={"order_id": order.id}, jwt_token=jwt_token)
         return Response(RefundRequestSerializer(refund).data, status=201)
@@ -226,11 +279,14 @@ class OrderViewSet(viewsets.ReadOnlyModelViewSet):
         note = request.data.get("note", "")
         if decision not in ["APPROVE", "REJECT"]:
             return Response({"error": "Decision must be APPROVE or REJECT."}, status=400)
+        reason_category = categorize_refund_reason(refund.reason)
         if decision == "APPROVE":
             refund.approve(note=note)
             Payment.objects.filter(order=order).update(status=Order.PAYMENT_REFUNDED)
+            refund_requests_total.labels(reason=reason_category, status="approved").inc()
         else:
             refund.reject(note=note)
+            refund_requests_total.labels(reason=reason_category, status="rejected").inc()
         jwt_token = str(request.auth) if request.auth else ''
         notify_user(user_id=order.buyer_id, title=f"Refund {decision.title()}d", body=f"Your refund for order #{order.id} was {decision.lower()}d.", url=f"/orders/order_detail.html?id={order.id}", type_="refund_update", data={"order_id": order.id}, jwt_token=jwt_token)
         return Response(RefundRequestSerializer(refund).data)

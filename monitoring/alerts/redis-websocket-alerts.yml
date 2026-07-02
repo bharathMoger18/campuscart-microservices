@@ -1,0 +1,51 @@
+# Add these four rules under the existing "campuscart-alerts" group in
+# alerting_rules.yml (same group as HighCPUUsage / PodCrashLooping —
+# do not create a second group, just append to the existing `rules:` list).
+#
+# Metric names match your actual notification_service/metrics.py imports
+# (no "notification_" prefix, unlike the course's example names).
+#
+# How to apply (this configmap is Helm-managed but you're already hand-
+# editing it for the per-service scrape jobs, so same pattern applies):
+#   kubectl edit configmap prometheus-server -n monitoring
+# Paste these 4 entries into the rules: list inside alerting_rules.yml,
+# save and exit. Your prometheus-server pod is 2/2 — it has a config-
+# reloader sidecar watching the mounted configmap, so it picks this up
+# automatically within ~1 minute. No restart needed. Confirm via
+# Prometheus UI -> Status -> Rules.
+
+- alert: RedisMemoryHigh
+  expr: redis_memory_used_bytes{service="redis-exporter"} > 400000000
+  for: 5m
+  labels:
+    severity: warning
+  annotations:
+    summary: Redis channel layer memory above 400MB
+    description: 'redis_memory_used_bytes = {{ $value | humanize }}B for 5+ minutes on the campuscart Redis pod. Likely ghost channel registrations accumulating (see notification-service file 11 — the 3,000-ghost-connection incident). Check redis_db_keys{db="db0"} vs ws_connections_active.'
+
+- alert: RedisEvictions
+  expr: rate(redis_evicted_keys_total{service="redis-exporter"}[5m]) > 0
+  for: 1m
+  labels:
+    severity: critical
+  annotations:
+    summary: Redis is evicting keys — channel layer data loss in progress
+    description: 'Any eviction on the Channels layer means queued chat messages or channel registrations are being silently dropped. This fires before Redis OOMKills, which is your last warning to act.'
+
+- alert: NotificationWSAbnormalDisconnectRate
+  expr: rate(ws_disconnect_total{job="notification-service",close_code="1006"}[5m]) > 5
+  for: 2m
+  labels:
+    severity: warning
+  annotations:
+    summary: High rate of abnormal WebSocket disconnects (close_code 1006)
+    description: '{{ $value }} abnormal closes/sec averaged over 5m on notification-service. This is the early-warning signal — it fires long before ws_connections_active drops to 0, giving you time to investigate Redis or network issues before users actually lose sessions.'
+
+- alert: RedisExporterDown
+  expr: up{service="redis-exporter"} == 0
+  for: 2m
+  labels:
+    severity: critical
+  annotations:
+    summary: redis-exporter target is down
+    description: Prometheus cannot scrape redis-exporter — you are currently blind to Redis channel layer memory, evictions, and connected-clients. Check the pod and the REDIS_ADDR env var.

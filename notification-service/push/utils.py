@@ -17,10 +17,17 @@ SEND FLOW:
 
 import json
 import logging
+import time
 from django.conf import settings
 from pywebpush import webpush, WebPushException
 
 from .models import PushSubscription, PushNotification
+
+from notification_service.metrics import (
+    push_notifications_sent_total,
+    push_notification_failures_total,
+    push_notification_duration_seconds,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -29,15 +36,51 @@ def _send_single_push(subscription: PushSubscription, payload: dict) -> bool:
     """
     Send a Web Push to a single subscription.
 
-    Returns True if sent successfully, False if subscription is invalid/expired.
-    Raises WebPushException for unexpected errors.
+    Returns True if sent successfully, False if subscription is invalid/expired
+    or any other failure occurred.
 
     The VAPID flow:
       1. Encrypt payload with browser's p256dh public key
       2. Sign request with our VAPID_PRIVATE_KEY
       3. POST to subscription.endpoint (browser vendor's push server)
       4. Browser vendor delivers to user's browser asynchronously
+
+    METRICS (added 2026-06-30):
+      push_notifications_sent_total: one increment per subscription/device
+      attempt (not per send_push_to_user_id call) — a user with 2 devices
+      where one succeeds and one is expired produces one "success" and one
+      "expired", which is the more useful signal than collapsing both into
+      one outcome per logical notification.
+
+      push_notification_failures_total error_type mapping is an
+      APPROXIMATION — pywebpush/WebPushException doesn't give us finer-
+      grained categorization than an HTTP status code (or none, for a
+      connection-level failure) without inspecting response bodies we
+      don't currently parse:
+        - HTTP 410           -> "subscription_expired" (the only mapping
+                                 that's actually certain — explicit in the
+                                 Web Push spec)
+        - other HTTP status   -> "invalid_endpoint" (best-effort bucket;
+          present on the response   most non-410 4xx/5xx push-service
+                                 errors trace back to a malformed/rejected
+                                 endpoint or payload, but this isn't
+                                 verified against your real traffic)
+        - no response at all  -> "network_error" (connection refused,
+          (connection-level)       timeout, DNS failure, etc.)
+      Tell me if you get real-world data showing this mapping is off and
+      I'll tighten it.
+
+    BUG FIX (2026-06-30): previously this only caught WebPushException.
+    A genuine connection-level failure (timeout, DNS failure, connection
+    refused) raises a different exception type and was NOT caught here —
+    it propagated out of this function, out of the `for sub in
+    subscriptions` loop in send_push_to_user_id below, skipping every
+    remaining subscription/recipient in that loop silently (only ever
+    caught by the blanket except in chat/consumers.py far upstream, with
+    no record of it happening). Now caught and handled the same as any
+    other failure.
     """
+    push_start = time.monotonic()
     try:
         webpush(
             subscription_info=subscription.as_subscription_info(),
@@ -46,6 +89,7 @@ def _send_single_push(subscription: PushSubscription, payload: dict) -> bool:
             vapid_claims={"sub": settings.VAPID_EMAIL},
             timeout=10,
         )
+        push_notifications_sent_total.labels(status="success").inc()
         return True
 
     except WebPushException as exc:
@@ -55,6 +99,10 @@ def _send_single_push(subscription: PushSubscription, payload: dict) -> bool:
         status_code = getattr(response, "status_code", None) if response else None
 
         if status_code == 410:
+            push_notifications_sent_total.labels(status="expired").inc()
+            push_notification_failures_total.labels(
+                error_type="subscription_expired"
+            ).inc()
             logger.info(
                 "Subscription expired (410), deleting: user_id=%s endpoint=%s",
                 subscription.user_id,
@@ -66,7 +114,10 @@ def _send_single_push(subscription: PushSubscription, payload: dict) -> bool:
                 logger.exception("Failed to delete expired subscription")
             return False
 
-        # Other errors (500, network issues) — log but don't delete subscription
+        # Other HTTP-level errors (4xx/5xx other than 410) — see mapping
+        # caveat in the docstring above.
+        push_notifications_sent_total.labels(status="failure").inc()
+        push_notification_failures_total.labels(error_type="invalid_endpoint").inc()
         logger.warning(
             "WebPush failed for user_id=%s: %s (status=%s)",
             subscription.user_id,
@@ -74,6 +125,25 @@ def _send_single_push(subscription: PushSubscription, payload: dict) -> bool:
             status_code,
         )
         return False
+
+    except Exception as exc:
+        # Connection-level failure — no HTTP response was ever received.
+        # This branch is the bug fix described in the docstring: previously
+        # unhandled and fatal to the calling loop.
+        push_notifications_sent_total.labels(status="failure").inc()
+        push_notification_failures_total.labels(error_type="network_error").inc()
+        logger.warning(
+            "WebPush network error for user_id=%s: %r",
+            subscription.user_id,
+            exc,
+        )
+        return False
+
+    finally:
+        # Recorded for both success and failure — metrics.py documents
+        # this as "Duration of pywebpush API calls", not "of successful
+        # calls only".
+        push_notification_duration_seconds.observe(time.monotonic() - push_start)
 
 
 def send_push_to_user_id(
@@ -118,7 +188,10 @@ def send_push_to_user_id(
     subscriptions = PushSubscription.objects.filter(user_id=user_id)
 
     if not subscriptions.exists():
-        # No subscriptions — log as undelivered, return
+        # No subscriptions — log as undelivered, return.
+        # Not counted in push_notifications_sent_total: no pywebpush call
+        # was ever attempted, so "sent" (success/failure/expired) doesn't
+        # apply here — there was nothing to send to.
         notification = PushNotification.objects.create(
             user_id=user_id,
             title=title,
@@ -190,6 +263,9 @@ def notify_order_update(user_id: int, order_id: int, status: str, message: str =
     """
     Send push notification for order status changes.
     Called by order-service via POST /api/v1/push/notify/ endpoint.
+
+    Note: this path never touches chat/Message at all, so it never feeds
+    messages_sent_total — see chat/consumers.py file-level docstring.
     """
     status_emojis = {
         "CONFIRMED": "✅",

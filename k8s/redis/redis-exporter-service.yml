@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-exporter
+  namespace: campuscart
+  labels:
+    app: redis-exporter
+  annotations:
+    # Your prometheus-server configmap has a "kubernetes-service-endpoints"
+    # job that auto-discovers any Service carrying these three annotations —
+    # this is the equivalent of the course's ServiceMonitor on your setup
+    # (which runs the prometheus-community Helm chart, not the Operator —
+    # there is no ServiceMonitor CRD installed, confirmed by your configmap
+    # having no monitoring.coreos.com section at all).
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9121"
+    prometheus.io/path: "/metrics"
+spec:
+  selector:
+    app: redis-exporter
+  ports:
+    - name: metrics
+      port: 9121
+      targetPort: 9121
+  type: ClusterIP
