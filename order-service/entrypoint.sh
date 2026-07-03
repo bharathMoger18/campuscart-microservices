@@ -9,9 +9,6 @@ set -e  # Exit immediately if any command fails
 echo "🚀 Starting order-service..."
 
 # ── STEP 1: Wait for database ─────────────────────────────────
-# DB_HOST and DB_PORT come from environment variables
-# set by docker-compose.yml
-# We ping PostgreSQL until it accepts connections.
 echo "⏳ Waiting for database at $DB_HOST:$DB_PORT..."
 
 while ! python -c "
@@ -35,8 +32,6 @@ done
 echo "✅ Database is ready!"
 
 # ── STEP 2: Run migrations ────────────────────────────────────
-# Applies any pending migrations automatically on startup.
-# Safe to run multiple times — Django skips already-applied migrations.
 echo "📦 Running migrations..."
 python manage.py migrate --noinput
 echo "✅ Migrations complete!"
@@ -46,12 +41,23 @@ echo "📁 Collecting static files..."
 python manage.py collectstatic --noinput
 echo "✅ Static files collected!"
 
-# ── STEP 4: Start gunicorn ────────────────────────────────────
-# gunicorn: production WSGI server (replaces runserver)
-# --workers 3: 3 worker processes (handles concurrent requests)
-# --bind 0.0.0.0:8000: listen on all interfaces, port 8000
-# --access-logfile -: print access logs to stdout (Docker captures them)
-# --error-logfile -: print error logs to stdout
+# ── STEP 4: PROMETHEUS MULTIPROCESS MODE ─────────────────────
+# gunicorn forks 3 worker processes. prometheus_client stores metric values
+# in per-worker in-memory counters by default — when Prometheus scrapes
+# /metrics it hits one worker and gets only that worker's counts, missing
+# the other two. Setting PROMETHEUS_MULTIPROC_DIR switches prometheus_client
+# to write metric values to shared files on disk instead. django_prometheus's
+# ExportToDjangoView then aggregates ALL worker files when /metrics is scraped.
+#
+# rm -rf first: on container restart (without a fresh filesystem), stale .db
+# files from the previous run's dead workers would still be here. Without
+# cleanup, their Counter values persist and inflate every metric permanently.
+# Each container start must get a clean directory.
+export PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus_multiproc
+rm -rf $PROMETHEUS_MULTIPROC_DIR
+mkdir -p $PROMETHEUS_MULTIPROC_DIR
+
+# ── STEP 5: Start gunicorn ────────────────────────────────────
 echo "🌐 Starting gunicorn on port 8000..."
 exec gunicorn order_service.wsgi:application \
     --workers 3 \

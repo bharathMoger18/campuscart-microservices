@@ -15,6 +15,7 @@ from rest_framework_simplejwt.exceptions import TokenError, InvalidToken
 from .serializers import RegisterSerializer, UserSerializer
 from .utils import send_verification_email, send_password_reset_email
 
+from rest_framework.exceptions import AuthenticationFailed
 from .metrics import (
     user_registrations_total,
     email_verifications_total,
@@ -98,7 +99,7 @@ class LoginView(TokenObtainPairView):
             serializer = self.get_serializer(data=request.data)
             try:
                 serializer.is_valid(raise_exception=True)
-            except (TokenError, InvalidToken):
+            except (TokenError, InvalidToken, AuthenticationFailed):
                 login_attempts_total.labels(status="invalid_credentials").inc()
                 return Response(
                     {"detail": "Invalid credentials"},
