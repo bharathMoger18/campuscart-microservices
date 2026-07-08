@@ -7,10 +7,16 @@ pipeline {
         timestamps()
     }
 
+    environment {
+        SERVICE_NAME = 'campuscart-microservices'
+        SHORT_SHA   = "${env.GIT_COMMIT?.take(7) ?: 'unknown'}"
+    }
+
     stages {
         stage('Checkout') {
             steps {
                 checkout scm
+                echo $SHORT_SHA
             }
         }
         stage('Prove We Are Really Here') {
