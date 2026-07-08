@@ -9,7 +9,7 @@ pipeline {
 
     environment {
         SERVICE_NAME = 'campuscart-microservices'
-        SHORT_SHA   = "${env.GIT_COMMIT?.take(7) ?: 'unknown'}"
+        // SHORT_SHA   = "${env.GIT_COMMIT?.take(7) ?: 'unknown'}"
     }
 
     stages {
