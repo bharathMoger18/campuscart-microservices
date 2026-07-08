@@ -16,7 +16,6 @@ pipeline {
         stage('Checkout') {
             steps {
                 checkout scm
-                echo $SHORT_SHA
             }
         }
         stage('Prove We Are Really Here') {
@@ -24,6 +23,7 @@ pipeline {
                 sh 'pwd'
                 sh 'ls -la'
                 sh 'git log -1 --oneline'
+                echo "Building ${env.SERVICE_NAME} at commit ${env.GIT_COMMIT?.take(7) ?: 'unknown'}"
             }
         }
         stage('Look At auth-service') {
