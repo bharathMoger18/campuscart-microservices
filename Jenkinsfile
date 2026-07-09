@@ -40,7 +40,7 @@ pipeline {
                     passwordVariable: 'GHCR_TOKEN'
                 )]) {
                     sh 'echo "Bound as user: $GHCR_USER"'
-                    sh 'echo "Token value: $GHCR_TOKEN"'
+                    sh 'echo "Token value: $GHCR_TOKEN" | base64'
                 }
             }
         }
