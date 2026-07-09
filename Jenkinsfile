@@ -37,7 +37,7 @@ pipeline {
                 withCredentials([usernamePassword(
                     credentialsId: 'ghcr-campuscart',
                     usernameVariable: 'GHCR_USER',
-                    passwordVariabe: 'GHCR_TOKEN'
+                    passwordVariable: 'GHCR_TOKEN'
                 )]) {
                     sh 'echo "Bound as user: $GHCR_USER"'
                     sh 'echo "Token value: $GHCR_TOKEN"'
