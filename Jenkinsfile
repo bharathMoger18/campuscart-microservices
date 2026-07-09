@@ -31,6 +31,19 @@ pipeline {
                 sh 'cat auth-service/Dockerfile | head -5'
             }
         }
+
+        stage('Prove GHCR credentials Bind corrextly') {
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: 'ghcr-campuscart',
+                    usernameVariable: 'GHCR_USER',
+                    passwordVariabe: 'GHCR_TOKEN'
+                )]) {
+                    sh 'echo "Bound as user: $GHCR_USER"'
+                    sh 'echo "Token value: $GHCR_TOKEN"'
+                }
+            }
+        }
     }
 
     post {
