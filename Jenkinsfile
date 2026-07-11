@@ -1,5 +1,9 @@
 pipeline {
-    agent any
+    agent {
+        kubernetes {
+            label 'build-agent'
+        }
+    }
 
     options {
         timeout(time: 15, unit: 'MINUTES')
