@@ -1,7 +1,7 @@
 pipeline {
     agent {
         kubernetes {
-            label 'build-agent'
+            label 'k8s-agent'
         }
     }
 
