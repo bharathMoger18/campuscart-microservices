@@ -1,0 +1,49 @@
+pipeline {
+    agent {
+        kubernetes {
+            inheritFrom 'jnlp-agent'
+        }
+    }
+    options {
+        timeout(time: 15, unit: 'MINUTES')
+        disableConcurrentBuilds()
+        timestamps()
+        buildDiscarder(logRotator(numToKeepStr: '30'))
+    }
+
+    environment {
+        SERVICE_NAME = 'frontend-service'
+    }
+    
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Validate') {
+            steps {
+                sh "test -f ${env.SERVICE_NAME}/Dockerfile"
+                echo "Building ${env.SERVICE_NAME} at commit ${env.GIT_COMMIT?.take(7) ?: 'unknown'}"
+            }
+        }
+
+         stage('Validate nginx Config') {
+            agent { docker { image 'nginx:alpine' } }
+            steps {
+                sh 'cp frontend-service/nginx.conf /etc/nginx/conf.d/default.conf && nginx -t'
+            }
+        }
+    }  
+
+    post {
+        success {
+            echo "${env.SERVICE_NAME}: validated cleanly"
+        }
+
+        failure {
+            echo "${env.SERVICE_NAME}: Validation failed"
+        }
+    } 
+}
